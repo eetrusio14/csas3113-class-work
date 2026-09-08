@@ -313,13 +313,14 @@ and returns a list with x consed to the front of each element of l.
 
 |#
 
-;; cons-every: any listof any -> listof any
-;; Purpose: Conses x onto the front of every element in ls.
+;; cons-every: any listof list -> listof list
+;; Purpose: Conses x onto the front of every list in ls.
 (define (cons-every x ls)
-  (cond
-    [(empty? ls) '()] ;; if ls is '(), nothing to cons x onto
-    ;; cons x, then cons the first element, then recur to do the rest of the ls
-    [else (cons x (cons (car ls) (cons-every x (cdr ls))))]))
+  (match ls
+    ['() '()] ;; if the ls of lists is '(), return '()
+    [`(,first . ,rest)
+     ;; Cons x onto the first list, and cons that onto the recursively processed tail
+     (cons (cons x first) (cons-every x rest))]))
 
 (check-equal? (cons-every 'a '()) '())
 (check-equal? (cons-every 'a '(b c d a)) '(a b a c a d a a))
