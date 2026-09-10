@@ -164,11 +164,11 @@ to x or satisfy pred.
     ;; returns true if y is eqv? to x or if y satisfies pred
     (or (eqv? y x) (pred y))))
 
-(check-true ((extend 1 even?) 1))
-(check-true ((extend 2 odd?) 5))
-(check-false ((extend 3 even?) 9))
-(check-true ((extend 'a number?) 17))
-(check-false ((extend 'a number?) 'b))
+(check-equal? ((extend 1 even?) 1) #t)
+(check-equal? ((extend 2 odd?) 5) #t)
+(check-equal? ((extend 3 even?) 9) #f)
+(check-equal? ((extend 'a number?) 17) #t)
+(check-equal? ((extend 'a number?) 'b) #f)
 
 
 #|
@@ -185,10 +185,10 @@ on this problem. Cycles are absolutely bad data.
 
 |#
 
-;; assv = 
+;; 
 
 ;; walk-symbol: any listof pair -> any
-;; Purpose: Searches for x in list s, walking through each symbol until finding a non-symbol or unassociated val.
+;; Purpose: Searches for a key x in list s, walking through each symbol until finding a non-symbol or unassociated val.
 (define (walk-symbol x s)
   (letrec ([pair (assv x s)]) ;; lookup pair with key x in s using assv
     (match pair
@@ -198,15 +198,12 @@ on this problem. Cycles are absolutely bad data.
       ;; if the value in pair is not sym, return it
       [`(,key . ,val) val])))
 
-;; Sample case for s
-(define s '((a . 1) (b . (2 3)) (c . 4) (d . e)))
-
-(check-equal? (walk-symbol 'd s) 'e)
-
-  
-    
-
-
+;; Case 1 (not in s)
+(check-equal? (walk-symbol 'f '((a . 1) (b . (2 3)) (c . 4) (d . e))) 'f)
+;; Case 2 (val is sym) -> pair (d . e) -> symbol? 'e -> 'e != key -> 'e
+(check-equal? (walk-symbol 'd '((a . 1) (b . (2 3)) (c . 4) (d . e))) 'e)
+;; Case 3 (val is not sym)
+(check-equal? (walk-symbol 'a '((a . 1) (b . (2 3)) (c . 4) (d . e))) 1)
 
 
 #| Part II Free, Bound, Lexical Address |#
@@ -221,8 +218,26 @@ word lumbda (notice you should not change declarations of a variable
 
 |#
 
+;; lambda->lumbda: lambda-expr -> lambda-expr
+;; Purpose: Replaces lambda as a binder in a lambda calculus expression.
+;; - Preserves the variable refs and declarations.
 (define (lambda->lumbda expr)
-  (error 'lambda->lumbda "not implemented"))
+  (match expr
+    ;; if given simple var ref and it's a sym, return it
+    [`,y #:when (symbol? y) y]
+    ;; replace lambda with lumbda and recur on the rest
+    [`(lambda (,x) ,body) `(lumbda (,x) ,(lambda->lumbda body))]
+    ;; recur on both operator and operand
+    [`(,rator ,rand) `(,(lambda->lumbda rator) ,(lambda->lumbda rand))]))
+
+;; Case 1 (referring to a symbol 'lambda with no declaration)
+(check-equal? (lambda->lumbda 'lambda) 'lambda)
+;; Case 2 (lambda abstraction)
+(check-equal? (lambda->lumbda '(lambda (x) x)) '(lumbda (x) x))
+;; Case 2 (lambda abstraction during declaration)
+(check-equal? (lambda->lumbda '(lambda (lambda) lambda)) '(lumbda (lambda) lambda))
+;; Case 3 (list of lambda abstractions)
+(check-equal? (lambda->lumbda '((lambda (x) x) (lambda (y) y))) '((lumbda (x) x) (lumbda (y) y)))
 
 
 #|
@@ -233,9 +248,27 @@ whether the expression contains a reference to that variable.
 
 |#
 
+;; reference-occurs?: symbol lambda-expr -> boolean
+;; Purpose: Determines whether a symbol x occurs as a variable reference anywhere in the lambda-expr expr.
 (define (reference-occurs? x expr)
-  (error 'reference-occurs? "not implemented"))
+  (match expr
+    ;; if y is a symbol, return true if y equals x
+    [`,y #:when (symbol? y) (eqv? y x)]
+    ;; if expr is a lambda-expr, recur on its body
+    [`(lambda (,param) ,body) (reference-occurs? x body)]
+    ;; if expr is a listof lambda-exprs, recur on rator and rand
+    [`(,rator ,rand) (or (reference-occurs? x rator) (reference-occurs? x rand))]))
 
+(check-equal? (reference-occurs? 'x 'x) #t)
+(check-equal? (reference-occurs? 'x 'y) #f)
+;; In declaration, but not referenced
+(check-equal? (reference-occurs? 'x '(lambda (x) y)) #f)
+;; Declared and references
+(check-equal? (reference-occurs? 'x '(lambda (x) x)) #t)
+;; Free reference to x
+(check-equal? (reference-occurs? 'x '(lambda (y) x)) #t)
+;; x occurs in the operand '((lambda (y) y) [x]))
+(check-equal? (reference-occurs? 'x '((lambda (y) y) x)) #t)
 
 #|
 
@@ -247,9 +280,20 @@ variables in your answer does not matter.
 
 |#
 
+;; var-references: lambda-expr -> listof symbol
+;; Purpose: Forms a list of all variable references occuring in the lambda-expr expr.
 (define (var-references expr)
-  (error 'var-references "not implemented"))
+  (match expr
+    ;; if y is symbol?, return it as a list with a single element y
+    [`,y #:when (symbol? y) (list y)]
+    ;; if expr is a lambda-expr, recur on its body
+    [`(lambda (,x) ,body) (var-references body)]
+    ;; if expr is a listof lambda-expr, recur on rator and rand
+    [`(,rator ,rand) (append (var-references rator) (var-references rand))]))
 
+(check-equal? (var-references 'x) '(x))
+(check-equal? (var-references '(lambda (x) (x y))) '(x y))
+(check-equal? (var-references '((lambda (x) x) (lambda (y) y))) '(x y))
 
 #|
 
@@ -259,9 +303,20 @@ duplicates as it evaluates. Use union in your definition.
 
 |#
 
+;; unique-var-references: lambda-expr -> listof symbol
+;; Purpose: Forms a list of unique variable references occuring in the lambda-expr expr. 
 (define (unique-var-references expr)
-  (error 'unique-var-references "not implemented"))
+  (match expr
+    ;; if y is symbol, return it as a list with a single element y
+    [`,y #:when (symbol? y) (list y)]
+    ;; if expr is a lambda-expr, recur on its body
+    [`(lambda (,x) ,body) (unique-var-references body)]
+    ;; if expr is a listof lambda-exprs, recur on rator and rand and combine with union operation
+    [`(,rator ,rand) (union (unique-var-references rator) (unique-var-references rand))]))
 
+(check-equal? (unique-var-references 'x) '(x))
+(check-equal? (unique-var-references '(lambda (x) (x (x y)))) '(x y))
+(check-equal? (unique-var-references '((lambda (x) (x y)) (lambda (z) (x y)))) '(x y))
 
 #|
 
@@ -274,9 +329,27 @@ problems; such solutions do not receive credit.
 
 |#
 
+;; free-reference-occurs?: symbol lambda-expr -> boolean
+;; Purpose: Check is symbol x is a free reference in lambda-expr expr.
 (define (free-reference-occurs? x expr)
-  (error 'free-reference-occurs? "not implemented"))
+  (match expr
+    ;; if y is symbol, check if y = x
+    [`,y #:when (symbol? y) (eqv? y x)]
+    ;; if expr is lambda-exprm return #f if param = x, else recur on body
+    [`(lambda (,param) ,body) (if (eqv? param x) #f (free-reference-occurs? x body))]
+    ;; if expr is a listof lambda-exprs, recur on rator and rand
+    [`(,rator ,rand)
+     (or (free-reference-occurs? x rator)
+         (free-reference-occurs? x rand))]))
 
+;; x is a free variable
+(check-equal? (free-reference-occurs? 'x 'x) #t)
+;; x is bound by lambda (x)
+(check-equal? (free-reference-occurs? 'x '(lambda (x) x)) #f)
+;; x is free inside lambda (y)
+(check-equal? (free-reference-occurs? 'x '(lambda (y) x)) #t)
+;; x is bound in rator, but free in rand
+(check-equal? (free-reference-occurs? 'x '((lambda (x) x) x)) #t)
 
 #|
 
@@ -287,8 +360,32 @@ otherwise.
 
 |#
 
+;; bound-reference-occurs?: symbol lambda-expr -> boolean
+;; Purpose: Checks if symbol x occurs as a bound reference in the lambda-expr expr.
 (define (bound-reference-occurs? x expr)
-  (error 'bound-reference-occurs? "not implemented"))
+  (match expr
+    ;; if y is a symbol, a single symbol cannot be a bound reference
+    [`,y #:when (symbol? y) #f]
+    ;; if expr is a lambda-expr, check if parameter y equals x
+    [`(lambda (,param) ,body)
+     (if (eqv? param x)
+         ;; if y equals x, check if x occurs as a reference anywhere in body
+         (reference-occurs? x body)
+         ;; if y does not equal x, recur on body for bound references
+         (bound-reference-occurs? x body))]
+    ;; if expr is a listof lambda-exprs, recur on rator and rand
+    [`(,rator ,rand)
+     (or (bound-reference-occurs? x rator)
+         (bound-reference-occurs? x rand))]))
+
+;; x is a free symbol
+(check-equal? (bound-reference-occurs? 'x 'x) #f)
+;; x is bound by lambda (x) and referenced in body
+(check-equal? (bound-reference-occurs? 'x '(lambda (x) x)) #t)
+;; x is declared but never referenced in body
+(check-equal? (bound-reference-occurs? 'x '(lambda (x) y)) #f)
+;; 'x is bound in rator but free in rand
+(check-equal? (bound-reference-occurs? 'x '((lambda (x) x) x)) #t)
 
 
 #|
@@ -302,8 +399,26 @@ starting point.
 
 |#
 
+;; unique-free-references: lambda-expr -> listof symbol
+;; Purpose: Forms a set of all unique free variable references occurring in the lambda-expr expr.
 (define (unique-free-references expr)
-  (error 'unique-free-references "not implemented"))
+  (match expr
+    ;; if y is a symbol, return it as a list with a single element y
+    [`,y #:when (symbol? y) (list y)]
+    ;; if expr is a lambda-expr, recur on body and remove parameter x from the result
+    [`(lambda (,x) ,body) (remv x (unique-free-references body))]
+    ;; if expr is a listof lambda-exprs, recur on rator and rand and combine with union
+    [`(,rator ,rand)
+     (union (unique-free-references rator) (unique-free-references rand))]))
+
+;; x is a symbol 'x
+(check-equal? (unique-free-references 'x) '(x))
+;; x is bound by lambda (x)
+(check-equal? (unique-free-references '(lambda (x) x) ) '())
+;; x is bound by lambda (x), but y is free
+(check-equal? (unique-free-references '(lambda (x) (x y))) '(y))
+;; x is bound in rator, but free in rand
+(check-equal? (unique-free-references '((lambda (x) x) x)) '(x))
 
 ;; Note that for instance
 
@@ -321,9 +436,35 @@ doesn't matter, but the list must not contain duplicate variables.
 
 |#
 
+;; unique-bound-references: lambda-expr -> listof symbol
+;; Purpose: Forms a list of unique bound variable references occurring in the lambda-expr expr.
 (define (unique-bound-references expr)
-  (error 'unique-bound-references "not implemented"))
+  (match expr
+    ;; if y is a symbol, return empty list
+    [`,y #:when (symbol? y) '()]
+    ;; if expr is a lambda-expr, check if x occurs free in body
+    [`(lambda (,x) ,body)
+     (if (free-reference-occurs? x body)
+         (union (list x) (unique-bound-references body))
+         (unique-bound-references body))]
+    ;; if expr is a listof lambda-exprs, recur on rator and rand and combine with union operation
+    [`(,rator ,rand)
+     (union (unique-bound-references rator) (unique-bound-references rand))]))
 
+;; x is a symbol
+(check-equal? (unique-bound-references 'x) '())
+
+;; x is bound by lambda (x) and referenced in body 
+(check-equal? (unique-bound-references '(lambda (x) x)) '(x))
+
+;; x is declared but never referenced in body 
+(check-equal? (unique-bound-references '(lambda (x) y)) '())
+
+;; x is free inside lambda (y)
+(check-equal? (unique-bound-references '(lambda (y) x)) '())
+
+;; 'x is bound in rator but free in rand
+(check-equal? (unique-bound-references '((lambda (x) x) x)) '(x))
 
 
 #|
@@ -355,83 +496,37 @@ will help you, copy it over to this file.
 
 |#
 
+;; Copied from hw1
+;; list-index-ofv: any listof any -> natnum
+;; Purpose: Finds the index of x in ls.
+(define (list-index-ofv x ls)
+  (cond
+    [(eqv? (car ls) x) 0] ;; if x is first, return 0 (first index)
+    ;; add1 to move past first element, recur on the rest of ls to find x
+    [else (add1 (list-index-ofv x (cdr ls)))]))
+
+(check-equal? (list-index-ofv 'a '(a b c d)) 0)
+(check-equal? (list-index-ofv 'c '(a b b b b d c )) 6)
+(check-equal? (list-index-ofv 42 '(10 20 30 42 50)) 3)
+(check-equal? (list-index-ofv 'x '(a b x c x d)) 2)
+
+
+;; lex: lambda-expr listof symbol -> lexical-expr
+;; Purpose: Replaces bound variable references in expr with lexical addresses using acc.
 (define (lex expr acc)
-  (error 'lex "not implemented"))
+  (match expr
+    ;; if y is a symbol, look up its index in acc and return (var index)
+    [`,y #:when (symbol? y) `(var ,(list-index-ofv y acc))]
+    ;; if expr is a lambda-expr, recur on body with x added to front of acc
+    [`(lambda (,x) ,body) `(lambda ,(lex body (cons x acc)))]
+    ;; if expr is a listof lambda-exprs, recur on rator and rand
+    [`(,rator ,rand) `(,(lex rator acc) ,(lex rand acc))]))
 
-#| Optional enrichment
+;; identity lambda
+(check-equal? (lex '(lambda (x) x) '()) '(lambda (var 0)))
 
-Problems 14–15 are optional. Gradescope does not require or test them.
-They are important preparation for later work, and you are strongly
-encouraged to attempt them. They deliberately have no starter stubs.
+;; nested lambdas
+(check-equal? (lex '(lambda (y) (lambda (x) (x y))) '()) '(lambda (lambda ((var 0) (var 1)))))
 
-|#
-
-;; Boxes are mutable memory references, meaning we can change the
-;; value the box contains. You will find it useful to consult the
-;; [Racket Documentation about
-;; boxes](https://docs.racket-lang.org/reference/boxes.html) for
-;; information about the box, unbox, and set-box! functions for this
-;; problem.
-
-;; For this problem we will now, instead, write our association list
-;; such that the right-hand side of each association is always a box
-;; that contains a value.
-
-;; Without boxes (or some side-effect) we would have to (re-)copy the
-;; entire data structure each time we wanted to change a portion of
-;; the data structure.
-
-;; Consider again the scenario of the walk-symbol problem. Imagine
-;; that we frequently look up values in that association list.
-
-#|
-
-14. You will implement walk-symbol-update, a version of walk-symbol
-that implements path-compression. The function walk-symbol may become
-prohibitively expensive, as certain perverse chains may be arbitrarily
-long. Consider the work you would have to do to walk a0 twice in the
-following association list.
-
-'((z . 26) (y . z) (x . y) ... (b . c) (a0 . b))
-
-With path-compression, when the function walks the association list to
-find the final value for the symbol we started with, it also changes
-the values in boxes we had to walk through along the way (this
-sequence is called the path) so that the right-hand side of each of
-those also contains the final value. Thus, if we have to walk that
-same symbol again, the lookup will be faster. See the following
-example:
-
-> (define a-list `((c . ,(box 15)) (e . ,(box 'f)) (b . ,(box 'c)) (a . ,(box 'b))))
-> a-list
-((c . #&15) (e . #&f) (b . #&c) (a . #&b))
-> (walk-symbol-update 'a a-list)
-15
-> a-list
-((c . #&15) (e . #&f) (b . #&15) (a . #&15))
-> (walk-symbol-update 'a a-list)
-15
-> a-list
-((c . #&15) (e . #&f) (b . #&15) (a . #&15))
-
-|#
-
-#| Optional enrichment: Just Dessert |#
-
-;; In order to return multiple values, you should see the Racket
-;; documentation on values and let-values (and call-with-values though
-;; you probably won't need it to define
-;; free-and-bound-references-occur?).
-
-#|
-
-15. Define a predicate free-and-bound-references-occur? that takes a
-variable x and a lambda-calculus expression, and returns two values,
-the first of which is a boolean answering whether the a free reference
-to x occurs in the expression, and the second is a boolean answering
-whether the a bound variable reference to x occurs bound in the
-expression. Your solution should be a one-pass solution, meaning you
-should not recur over the same data twice, and you should not use an
-accumulator.
-
-|#
+;; multiple var refs
+(check-equal? (lex '(lambda (a) (lambda (b) (lambda (c) ((a c) (b c))))) '())'(lambda (lambda (lambda (((var 2) (var 0)) ((var 1) (var 0)))))))
