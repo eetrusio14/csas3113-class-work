@@ -141,7 +141,8 @@ environment argument supplied to value-of is already such a function.
        (value-of body (lambda (y) (if (eqv? x y) a (env y)))))]
     ;; evaluate e in original env, body evaluated with x extended
     [`(let ([,(? symbol? x) ,e]) ,body)
-     (value-of body (lambda (y) (if (eqv? x y) (value-of e env) (env y))))]
+     (let ([val (value-of e env)])
+       (value-of body (lambda (y) (if (eqv? x y) val (env y)))))]
     ;; application
     [`(,rator ,rand) ((value-of rator env) (value-of rand env))]))
 
@@ -181,6 +182,7 @@ environment argument supplied to value-of is already such a function.
     5)
   (lambda (y) (value-of y)))
  16)
+
 
 #|
 
