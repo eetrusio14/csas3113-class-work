@@ -221,7 +221,7 @@ depend on the representation behind it.
         a
         (apply-env-fn env query))))
 
-;; extend-env-fn: env sym -> env
+;; apply-env-fn: env sym -> val
 ;; Purpose: Lookup y's value in env.
 (define (apply-env-fn env y)
   (env y))
@@ -251,6 +251,28 @@ depend on the representation behind it.
   (match exprs
     ['() '()]
     [`(,first . ,rest) (cons (value-of-fn first env) (evlist-fn rest env))]))
+
+(test-equal?
+ "A nearly-sufficient test-case of your program's functionality"
+ (value-of-fn
+  '(((lambda (f)
+       (lambda (n) (if (zero? n) 1 (* n ((f f) (sub1 n))))))
+     (lambda (f)
+       (lambda (n) (if (zero? n) 1 (* n ((f f) (sub1 n)))))))
+    5)
+  (empty-env-fn))
+ 120)
+
+(test-equal?
+ "A nearly-sufficient test-case of your program's functionality with addition"
+ (value-of-fn
+  '(((lambda (f)
+       (lambda (n) (if (zero? n) 1 (+ n ((f f) (sub1 n))))))
+     (lambda (f)
+       (lambda (n) (if (zero? n) 1 (+ n ((f f) (sub1 n)))))))
+    5)
+  (empty-env-fn))
+ 16)
 
 
 #|
@@ -284,24 +306,29 @@ the same file for us to test.
 
 |#
 
+;; Env ::= (empty-environment) | (environment-extension symbol value Env)
+(struct empty-environment () #:transparent)
+(struct environment-extension (name value rest) #:transparent)
+
 ;; empty-env-ds: -> env
 ;; Purpose: An environment with no bindings as data.
 (define (empty-env-ds)
-  '())
+  (empty-environment))
 
 ;; extend-env-ds: symbol value env -> env
-;; Purpose: Conses a new (x . a) pair onto env; newest binding supercedes old.
+;; Purpose: Wraps env in a new environment-extension tag holding x and a.
 (define (extend-env-ds x a env)
-  (cons (cons x a) env))
+  (environment-extension x a env))
 
-;; apply-env-ds: env symbol -> value
-;; Purpose: Searches env for the pair whose name matches y.
+;; apply-env-ds: env symbol -> val
+;; Purpose: Pattern-matches on env's tag to search for y's binding.
 (define (apply-env-ds env y)
   (match env
     ;; no bindings, y never declared
-    ['() (error 'apply-env-ds "unbound variable: ~a" y)]
-    ;; builds dotted pairs (x . a)
-    [`((,x ,a) ,rest) (if (eqv? x y) a (apply-env-ds rest y))]))
+    [(empty-environment) (error 'apply-env-ds "unbound variable: ~a" y)]
+    ;; check the newest binding first, else recur into the rest
+    [(environment-extension name value rest)
+     (if (eqv? y name) value (apply-env-ds rest y))]))
 
 ;; Same as value-of and value-of-fn
 (define (value-of-ds expr env)
@@ -327,6 +354,28 @@ the same file for us to test.
   (match exprs
     ['() '()]
     [`(,first . ,rest) (cons (value-of-ds first env) (evlist-ds rest env))]))
+
+(test-equal?
+ "A nearly-sufficient test-case of your program's functionality"
+ (value-of-ds
+  '(((lambda (f)
+       (lambda (n) (if (zero? n) 1 (* n ((f f) (sub1 n))))))
+     (lambda (f)
+       (lambda (n) (if (zero? n) 1 (* n ((f f) (sub1 n)))))))
+    5)
+  (empty-env-ds))
+ 120)
+
+(test-equal?
+ "A nearly-sufficient test-case of your program's functionality with addition"
+ (value-of-ds
+  '(((lambda (f)
+       (lambda (n) (if (zero? n) 1 (+ n ((f f) (sub1 n))))))
+     (lambda (f)
+       (lambda (n) (if (zero? n) 1 (+ n ((f f) (sub1 n)))))))
+    5)
+  (empty-env-ds))
+ 16)
 
 
 #| ===== A new syntax ===== |#
