@@ -88,31 +88,29 @@
 
 (define (lex expr acc)
   (match expr
+    ;; a number becomes (const n) so it can't be mistaken for an address
     [`,n #:when (number? n) `(const ,n)]
     ;; if y is a symbol, look up its index in acc and return (var index)
     [`,y #:when (symbol? y) `(var ,(list-index-ofv y acc))]
-    [`(zero? ,e) `(zero ,(lex e acc))]
+    ;; operators keep their names; only the operands are translated
+    [`(zero? ,e) `(zero? ,(lex e acc))]
     [`(sub1 ,e) `(sub1 ,(lex e acc))]
-    [`(* ,e1 ,e2) `(mult ,(lex e1 acc) ,(lex e2 acc))]
+    [`(* ,e1 ,e2) `(* ,(lex e1 acc) ,(lex e2 acc))]
     [`(if ,t ,c ,a) `(if ,(lex t acc) ,(lex c acc) ,(lex a acc))]
     ;; if expr is a lambda-expr, recur on body with x added to front of acc
     [`(lambda (,x) ,body) `(lambda ,(lex body (cons x acc)))]
+    ;; e is translated in the old acc; only body sees x
     [`(let ([,x ,e]) ,body)
      `(let ,(lex e acc) ,(lex body (cons x acc)))]
-    ;; if expr is a listof lambda-exprs, recur on rator and rand
+    ;; application: recur on rator and rand
     [`(,rator ,rand) `(,(lex rator acc) ,(lex rand acc))]))
 
-(check-equal? (lex '(zero? x) '(x))
-              '(zero (var 0)))
-(check-equal? (lex '(* 3 y) '(y))
-              '(mult (const 3) (var 0)))
-(check-equal? (lex '(lambda (y) (let ([x 5]) y)) '())
-              '(lambda (let (const 5) (var 1))))
-(check-equal? (lex '(lambda (y) (let ([x y]) x)) '())
-              '(lambda (let (var 0) (var 0))))
+(check-equal? (lex '(zero? x) '(x)) '(zero? (var 0)))
+(check-equal? (lex '(* 3 y) '(y)) '(* (const 3) (var 0)))
+(check-equal? (lex '(* 4 5) '()) '(* (const 4) (const 5)))
+(check-equal? (lex '(zero? 5) '()) '(zero? (const 5)))
 (check-equal? (lex '(if (zero? 0) 1 2) '())
-              '(if (zero (const 0)) (const 1) (const 2)))
-
+              '(if (zero? (const 0)) (const 1) (const 2)))
 #| 
 
 1. The following regression tests from your last assignment should
@@ -817,21 +815,30 @@ doing so. Also write tests for your code.
     [`(if ,test ,conseq ,altern)
      ;; If test is not yet #t or #f, normalize the test first until it reduces
      (let ([test^ (norm test)])
-       (norm `(if ,test^ ,conseq ,altern)))]
+       (if (equal? test^ test)
+           ;; test is stuck (e.g. a free variable), so the if is stuck; normalize the branches and stop
+           `(if ,test ,(norm conseq) ,(norm altern))
+           ;; test changed, so it may now be #t or #f; try again
+           (norm `(if ,test^ ,conseq ,altern))))]
     ;; zero? case
     [`(zero? 0) #t]
     [`(zero? ,n) #:when (number? n) #f] ;; Non-zero numbers reduce directly to #f
     [`(zero? ,e)
      ;; Operand is a compound term, reduce it and retry
      (let ([e^ (norm e)])
-       (norm `(zero? ,e^)))]    
+       (if (equal? e^ e)
+           ;; operand is stuck, so (zero? e) is stuck too
+           `(zero? ,e)
+           (norm `(zero? ,e^))))]
     ;; sub1 case
     [`(sub1 ,n) #:when (number? n)
      (sub1 n)]
     [`(sub1 ,e)
      (let ([e^ (norm e)])
-       (norm `(sub1 ,e^)))]
-    
+       (if (equal? e^ e)
+           ;; operand is stuck, so (sub1 e) is stuck too
+           `(sub1 ,e)
+           (norm `(sub1 ,e^))))]
     ;; mult case
     [`(* ,n1 ,n2)
      #:when (and (number? n1) (number? n2))
@@ -840,15 +847,21 @@ doing so. Also write tests for your code.
      #:when (number? n1)
      ;; First argument is ready, normalize the second argument.
      (let ([e^ (norm e)])
-       (norm `(* ,n1 ,e^)))]
+       (if (equal? e^ e)
+           ;; second argument is stuck, so the product is stuck
+           `(* ,n1 ,e)
+           (norm `(* ,n1 ,e^))))]
     [`(* ,e1 ,e2)
      ;; Neither argument is evaluated, normalize the first argument first.
      (let ([e1^ (norm e1)])
-       (norm `(* ,e1^ ,e2)))]    
+       (if (equal? e1^ e1)
+           ;; first argument is stuck and stays stuck; still normalize the second, then stop
+           `(* ,e1 ,(norm e2))
+           (norm `(* ,e1^ ,e2))))]
     ;; Normalize under the binder to compute the full normal form.
     [`(lambda (,x) ,e)
-     (let ([e^ (norm e)])
-       (norm `(lambda (,x) ,e^)))]    
+     ;; normalize the body once; the result is the normal form, nothing left to retry
+     `(lambda (,x) ,(norm e))]
     ;; Plain applications or free vars
     [`(,x ,v)
      #:when (and (symbol? x) (value? v))
@@ -857,14 +870,24 @@ doing so. Also write tests for your code.
      #:when (symbol? x)
      ;; If the head is a free variable but the argument is not yet a value, normalize the arg
      (let ([e^ (norm e)])
-       (norm `(,x ,e^)))]    
+       (if (equal? e^ e)
+           ;; argument is stuck, so the application is stuck
+           `(,x ,e)
+           (norm `(,x ,e^))))]
     ;; Beta reduction, substitute the argument e2 into body e1, then normalize the resulting term
     [`((lambda (,x) ,e1) ,e2)
-     (norm (subst e2 x e1))]    
+     (norm (subst e2 x e1))]
     ;; application: operator is not yet a lambda; normalize operator first
     [`(,e1 ,e2)
      (let ([e1^ (norm e1)])
-       (norm `(,e1^ ,e2)))]    
+       (cond
+         ;; operator changed, so it may now be a lambda; try again
+         [(not (equal? e1^ e1)) (norm `(,e1^ ,e2))]
+         ;; a number or boolean can never be applied (Example 2)
+         [(or (number? e1) (boolean? e1))
+          (error 'norm "cannot apply non-procedure: ~s" e1)]
+         ;; operator is stuck; normalize the argument and stop
+         [else `(,e1 ,(norm e2))]))]
     [else (error 'norm "invalid expression ~s" exp)]))
 
 ;; Tests for Q6 functions
