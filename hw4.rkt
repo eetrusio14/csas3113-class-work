@@ -349,8 +349,8 @@ code. That's evidence we've done a good job designing our interface.
     [`(sub1 ,e) (sub1 (value-of-ds e env))]
     [`(* ,e1 ,e2) (* (value-of-ds e1 env) (value-of-ds e2 env))]
     [`(+ . ,exprs) (sum-list (evlist-ds exprs env))]
-    [`(if ,test ,cons ,alt)
-     (if (value-of-ds test env) (value-of-ds cons env) (value-of-ds alt env))]
+    [`(if ,test ,conse ,alt)
+     (if (value-of-ds test env) (value-of-ds conse env) (value-of-ds alt env))]
     [`(lambda (,x) ,body) #:when (symbol? x)
      (make-closure-ds x body env)]
     [`(let ([,x ,e]) ,body) #:when (symbol? x)
@@ -450,7 +450,7 @@ bit of a tricky beast. So here's the quote line for the interpreter.
        [`(lambda (,x) ,body)
         (value-of-dynamic body (extend-env x (value-of-dynamic rand env) env))])]))
 
-;; Tests
+;; Tests for value-of-dynamic with most body cases
 
 ;; Under dynamic, x maps to 5
 (check-equal?
@@ -488,7 +488,47 @@ bit of a tricky beast. So here's the quote line for the interpreter.
   (empty-env))
  '(1 2))
 
+;; car of '(42 99) = 42
+(check-equal?
+ (value-of-dynamic
+  '(car (cons 42 99))
+  (empty-env))
+ 42)
 
+;; cdr of '(37 12) is 12
+(check-equal?
+ (value-of-dynamic
+  '(cdr (cons 37 12))
+  (empty-env))
+ 12)
+
+;; car of cdr of '(a b c) = b
+(check-equal?
+ (value-of-dynamic
+  '(car (cdr '(a b c)))
+  (empty-env))
+ 'b)
+
+;; null? '() is true
+(check-equal?
+ (value-of-dynamic
+  '(null? '())
+  (empty-env))
+ #t)
+
+;; test = (zero? 1), conse = 10, alt = 20
+(check-equal?
+ (value-of-dynamic
+  '(if (zero? 1) 10 20)
+  (empty-env))
+ 20)
+
+;; (* (sub1 5) 6) = (* 4 6) = 24
+(check-equal?
+ (value-of-dynamic
+  '(* (sub1 5) 6)
+  (empty-env))
+ 24)
 
 #| Just Dessert |#
 
@@ -614,7 +654,10 @@ All that said, your task is to define valof. It should be short and
 sweet, like our functional apply-closure.
 
 |#
-
+;; valof: expr env -> val
+;; Purpose: Evaluates an expr by applying it to an env.
+(define (valof expr env)
+  (expr env))
 
 
 #| 
@@ -710,14 +753,17 @@ doing so. Also write tests for your code.
 
 |#
 
-#| 
 
-;; Uncomment and complete 
-
+;; subst: expr sym expr -> expr
+;; Purpose: Substitutes e^ for all free occurrences of x in e.
 (define (subst e^ x e)
   (match e
+    ;; Base type cases: constants have no vars, substitution leaves them the same
     [`,n #:when (number? n) n]
     [`,b #:when (boolean? b) b]
+    ;; If sym y matches target x, replace it with e^, else leave it as is
+    [`,y #:when (symbol? y) (if (eqv? y x) e^ y)]
+    ;; Substitute recursively into each subexpr
     [`(if ,e1 ,e2 ,e3)
      (let ([e1^ (subst e^ x e1)]
            [e2^ (subst e^ x e2)]
@@ -733,65 +779,189 @@ doing so. Also write tests for your code.
      (let ([e1^ (subst e^ x e1)]
            [e2^ (subst e^ x e2)])
        `(* ,e1^ ,e2^))]
-    ;; Finish me!
+    [`(lambda (,y) ,body)
+     (if (eqv? y x)
+         ;; if y = x, the inner param y shadows any outer occurrence of x
+         ;; x cannot appear free in body, so stop
+         `(lambda (,x) ,body)
+         ;; if y != x, rename y to new sym z (gensym), rename y -> z in body
+         ;; then substitue for e^ in x on renamed body to avoid var capture
+         (let ([z (gensym y)])
+           `(lambda (,z) ,(subst e^ x (subst z y body)))))]
     [`(,e1 ,e2)
      (let ([e1^ (subst e^ x e1)]
            [e2^ (subst e^ x e2)])
        `(,e1^ ,e2^))]))
 
-(define (value? exp)
-  (match exp
+;; value?: any -> bool
+;; Purpose: Determines whether or not an expr is a fully evaluated value.
+(define (value? expr)
+  (match expr
     [`,x #:when (symbol? x) #t]
     [`,n #:when (number? n) #t]
     [`,b #:when (boolean? b) #t]
-    ;; Finish me!
+    ;; a lambda is a value only once its body has also been reduced to a value.
+    [`(lambda (,x) ,body) #:when (symbol? x) (value? body)]
     [else #f]))
 
+;; norm: expr -> expr
+;; Purpose: Reduces an expr to its normal form by iteratively applying beta-reductions and rewrite rules w/o an env.
 (define (norm exp)
   (match exp
+    ;; if already a normal value, no more reductions can apply.
     [`,v #:when (value? v) v]
     [`(if #t ,conseq ,altern)
      (norm conseq)]
     [`(if #f ,conseq ,altern)
      (norm altern)]
-    [`(if ,test ,conseq, altern)
+    [`(if ,test ,conseq ,altern)
+     ;; If test is not yet #t or #f, normalize the test first until it reduces
      (let ([test^ (norm test)])
        (norm `(if ,test^ ,conseq ,altern)))]
+    ;; zero? case
     [`(zero? 0) #t]
+    [`(zero? ,n) #:when (number? n) #f] ;; Non-zero numbers reduce directly to #f
     [`(zero? ,e)
+     ;; Operand is a compound term, reduce it and retry
      (let ([e^ (norm e)])
-       (norm `(zero? ,e^)))]
+       (norm `(zero? ,e^)))]    
+    ;; sub1 case
     [`(sub1 ,n) #:when (number? n)
      (sub1 n)]
     [`(sub1 ,e)
      (let ([e^ (norm e)])
        (norm `(sub1 ,e^)))]
+    
+    ;; mult case
     [`(* ,n1 ,n2)
      #:when (and (number? n1) (number? n2))
      (* n1 n2)]
     [`(* ,n1 ,e)
      #:when (number? n1)
+     ;; First argument is ready, normalize the second argument.
      (let ([e^ (norm e)])
        (norm `(* ,n1 ,e^)))]
     [`(* ,e1 ,e2)
+     ;; Neither argument is evaluated, normalize the first argument first.
      (let ([e1^ (norm e1)])
-       (norm `(* ,e1^ e2)))]
+       (norm `(* ,e1^ ,e2)))]    
+    ;; Normalize under the binder to compute the full normal form.
     [`(lambda (,x) ,e)
      (let ([e^ (norm e)])
-       (norm `(lambda (,x) ,e^)))]
+       (norm `(lambda (,x) ,e^)))]    
+    ;; Plain applications or free vars
     [`(,x ,v)
      #:when (and (symbol? x) (value? v))
      `(,x ,v)]
     [`(,x ,e)
-     (guard (symbol? x))
+     #:when (symbol? x)
+     ;; If the head is a free variable but the argument is not yet a value, normalize the arg
      (let ([e^ (norm e)])
-       (norm `(,x ,e^)))]
+       (norm `(,x ,e^)))]    
+    ;; Beta reduction, substitute the argument e2 into body e1, then normalize the resulting term
     [`((lambda (,x) ,e1) ,e2)
-     ;; Finish me!
-     ]
+     (norm (subst e2 x e1))]    
+    ;; application: operator is not yet a lambda; normalize operator first
     [`(,e1 ,e2)
      (let ([e1^ (norm e1)])
-       (norm `(,e1^ ,e2)))]
-    [else (error 'norm "invalid expression ~s" x)]))
+       (norm `(,e1^ ,e2)))]    
+    [else (error 'norm "invalid expression ~s" exp)]))
 
-|#
+;; Tests for Q6 functions
+
+;; subst
+
+;; Replaces free var x with 5
+(check-equal? (subst 5 'x 'x) 5)
+
+;; Var y is unchanged by subst
+(check-equal? (subst 5 'x 'y) 'y)
+
+;; Substitutes x into sub1 and *
+(check-equal? (subst 5 'x '(* (sub1 x) x)) '(* (sub1 5) 5))
+
+;; Substitutes b into cond test
+(check-equal? (subst #t 'b '(if b 1 2)) '(if #t 1 2))
+
+;; Inner x shadows outer x, so body is unchanged
+(check-equal? (subst 5 'x '(lambda (x) x)) '(lambda (x) x))
+
+;; value?
+
+;; nums, bools, and syms are values
+(check-equal?
+ (value? 42)
+ #t)
+
+(check-equal?
+ (value? #f)
+ #t)
+
+(check-equal?
+ (value? 'x)
+ #t)
+
+;; (lambda (x) x) is a value because its body 'x is a value
+(check-equal?
+ (value? '(lambda (x) x))
+ #t)
+
+;; (lambda (x) (* 2 3)) is not a value because (* 2 3) can still be reduced
+(check-equal?
+ (value? '(lambda (x) (* 2 3)))
+ #f)
+
+;; Arithmetic application is not a value
+(check-equal?
+ (value? '(* 2 3))
+ #f)
+
+;; norm
+
+;; Beta reduction + arithmetic op: (* 5 3) = 15
+(check-equal? (norm '((lambda (x) (* x 3)) 5)) 15)
+
+;; (sub1 6) = 5
+(check-equal?
+ (norm '(sub1 6))
+ 5)
+
+;; zero? on 0 reduces to #t
+(check-equal?
+ (norm '(zero? 0))
+ #t)
+ 
+;; (* (sub1 4) 2) = (* 3 2) = 6
+(check-equal?
+ (norm '((lambda (x) (* (sub1 x) 2)) 4))
+ 6)
+
+;; Cond test #t, reduces conse
+(check-equal?
+ (norm '(if (zero? 0) 10 20))
+ 10)
+
+;; Cond test #f, reduces alt
+(check-equal?
+ (norm '(if (zero? 1) 10 20))
+ 20)
+
+;; Free variable application halts at normal form
+(check-equal?
+ (norm '((lambda (x) (z x)) (lambda (y) y)))
+ '(z (lambda (y) y)))
+
+;; Double application to 3 = (* 2 (* 3 2)) = 12
+(check-equal?
+ (norm '(((lambda (f) (lambda (x) (f (f x)))) (lambda (n) (* n 2))) 3))
+ 12)
+
+;; Identity function normalizes to itself
+(check-equal?
+ (norm '(lambda (x) x))
+ '(lambda (x) x))
+
+;; (* 2 3) reduces inside lambda body
+(check-equal?
+ (norm '(lambda (x) (* 2 3)))
+ '(lambda (x) 6))
