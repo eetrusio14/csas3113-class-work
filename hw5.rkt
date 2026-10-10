@@ -54,14 +54,24 @@
 
 #| Parameter-passing Conventions |#
 
+;; empty-env: -> Env
+;; Purpose: Makes an env with no bindings; looking up any variable is an error.
 (define (empty-env)
   (lambda (y) (error 'empty-env "unbound variable: ~a" y)))
 
+;; extend-env: symbol Box Env -> Env
+;; Purpose: Makes a new env that maps x to a, and defers to env for everything else.
 (define (extend-env x a env)
   (lambda (y) (if (eqv? x y) a (apply-env env y))))
 
+;; apply-env: Env symbol -> Box
+;; Purpose: Looks up the box that y is bound to in env.
 (define (apply-env env y)
   (env y))
+
+(check-equal? (apply-env (extend-env 'x 1 (empty-env)) 'x) 1)
+(check-equal? (apply-env (extend-env 'x 2 (extend-env 'x 1 (empty-env))) 'x) 2)
+(check-equal? (apply-env (extend-env 'x 1 (extend-env 'y 2 (empty-env))) 'y) 2)
 
 #|
 
@@ -74,6 +84,9 @@ set up for the next interpreter.
 
 |#
 
+;; val-of-cbv: Exp Env -> Value
+;; Purpose: Evaluates exp using call-by-value. Every argument is evaluated first,
+;; then put in a NEW box, so a callee's set! never reaches the caller's variable.
 (define (val-of-cbv exp env)
   (match exp
     [`,b #:when (boolean? b) b]
@@ -105,7 +118,12 @@ set up for the next interpreter.
                   ((val-of-cbv rator env) (box (unbox (apply-env env y))))]
     [`(,rator ,rand) ((val-of-cbv rator env) (box (val-of-cbv rand env)))]))
 
-
+ 
+(check-equal? (val-of-cbv '((lambda (x) (* x x)) 7) (empty-env)) 49)
+(check-equal? (val-of-cbv '(let ((x 5)) (let ((x (sub1 x))) x)) (empty-env)) 4)
+(check-equal? (val-of-cbv '(let ((x 5)) (begin2 (set! x 10) x)) (empty-env)) 10)
+(check-equal? (val-of-cbv '(let ((x 5)) (begin2 ((lambda (y) (set! y 99)) x) x))
+                          (empty-env)) 5)
 
 #|
 
@@ -115,6 +133,10 @@ val-of-cbv interpreter.
 
 |#
 
+;; val-of-cbr: Exp Env -> Value
+;; Purpose: Evaluates exp using call-by-reference. A variable passed as an argument
+;; shares its box with the parameter (same "address"), so set! in the callee is
+;; visible to the caller. Any other argument gets a fresh box.
 (define (val-of-cbr exp env)
   (match exp
     [`,b #:when (boolean? b) b]
@@ -134,10 +156,17 @@ val-of-cbv interpreter.
     [`(lambda (,x) ,body)
      (lambda (a) (val-of-cbr body (extend-env x a env)))]
     [`(,rator ,y) #:when (symbol? y)
-     ((val-of-cbr rator env) (apply-env env y))]          ; <-- the change
+     ((val-of-cbr rator env) (apply-env env y))]       
     [`(,rator ,rand)
      ((val-of-cbr rator env) (box (val-of-cbr rand env)))]))
 
+(check-equal? (val-of-cbr '((lambda (x) (* x x)) 7) (empty-env)) 49)
+(check-equal? (val-of-cbr '(let ((x 5)) (begin2 ((lambda (y) (set! y 99)) x) x))
+                          (empty-env)) 99)
+(check-equal? (val-of-cbr '(let ((x 5)) (begin2 ((lambda (y) (set! y 99)) (sub1 x)) x))
+                          (empty-env)) 5)
+(check-equal? (val-of-cbr '(let ((x 1)) ((lambda (f) (begin2 (f x) x)) (lambda (y) (set! y 7))))
+                          (empty-env)) 7)
 
 #|
 
@@ -146,6 +175,9 @@ involve only a slight change from your val-of-cbr interpreter.
 
 |#
 
+;; val-of-cbname: Exp Env -> Value
+;; Purpose: Evaluates exp using call-by-name. Arguments and let rhs are
+;; delayed in thunks and re-run every time the variable is used (no sharing).
 (define (val-of-cbname exp env)
   (match exp
     [`,b #:when (boolean? b) b]
@@ -168,6 +200,15 @@ involve only a slight change from your val-of-cbr interpreter.
     [`(,rator ,rand)
      ((val-of-cbname rator env) (box (lambda () (val-of-cbname rand env))))]))
 
+(define omega '((lambda (x) (x x)) (lambda (x) (x x))))
+ 
+(check-equal? (val-of-cbname '((lambda (x) (* x x)) 7) (empty-env)) 49)
+(check-equal? (val-of-cbname `((lambda (z) 7) ,omega) (empty-env)) 7)
+(check-equal? (val-of-cbname `(let ((x ,omega)) 3) (empty-env)) 3)
+(check-equal? (val-of-cbname '(let ((x 2)) (let ((f (lambda (e) x))) (let ((x 5)) (f 0))))
+                             (empty-env)) 2)
+       
+
 #|
 
 4. Implement val-of-cbneed, your call-by-need interpreter. This should
@@ -175,11 +216,18 @@ involve only a small change from your val-of-cbname interpreter.
 
 |#
 
+;; unbox/need: Box -> Value
+;; Purpose: Runs the thunk in b, then overwrites b with a thunk that just returns
+;; the saved answer, so later lookups reuse the result instead of recomputing it.
 (define (unbox/need b)
   (let ([v ((unbox b))])
     (set-box! b (lambda () v))
     v))
- 
+
+;; val-of-cbneed: Exp Env -> Value
+;; Purpose: Evaluates exp using cbneed, like cbname, but each delayed expression 
+;; is evaluated at most once and the result is shared by every name
+;; that points at that same box.
 (define (val-of-cbneed exp env)
   (match exp
     [`,b #:when (boolean? b) b]
@@ -202,6 +250,9 @@ involve only a small change from your val-of-cbname interpreter.
     [`(,rator ,rand)
      ((val-of-cbneed rator env) (box (lambda () (val-of-cbneed rand env))))]))
 
+(check-equal? (val-of-cbneed '((lambda (x) (* x x)) 7) (empty-env)) 49)
+(check-equal? (val-of-cbneed `((lambda (z) 7) ,omega) (empty-env)) 7)
+(check-equal? (val-of-cbneed `(let ((x ,omega)) 3) (empty-env)) 3)
 
 #| Brainteasers |#
 
@@ -245,6 +296,12 @@ this cons test evaluates to '(1 2 3 4 5).
                          (lambda (i)
                            (cons^ 1 ((map (lambda (x) (add1 x))) (m i)))))) 0)) 5)))))
 
+(check-equal? (val-of-cbv cons-test (empty-env)) '(1 2 3 4 5))
+(check-equal? (val-of-cbv '(cons 1 (cons 2 '())) (empty-env)) '(1 2))
+(check-equal? (val-of-cbv '(car^ (cons^ 1 ((lambda (x) (x x)) (lambda (x) (x x)))))
+                          (empty-env)) 1)
+(check-equal? (val-of-cbv '(null? '()) (empty-env)) #t)
+
 #| Just Dessert |#
 
 #|
@@ -263,8 +320,8 @@ Answer:
 norm is most similar to call by name. When it performs a beta reduction, it passes
 the argument into the body without evaluating it first, so the argument is only evaluated
 if the body needs it. Since norm just copies the expression in, it gets re-evaluated
-every time it’s used, not shared (same as cbname).
-
+every time it's used, not shared (same as cbname).
+ 
 The differences are on lambda exp with bodies that evaluate to a simple data type.
 Ex. (lambda (x) (* 3 3)). norm would simplify the body to (lambda (x) 9) but
 val-of-cbname would return a procedure without touching the body.
@@ -282,4 +339,34 @@ with it, I guess. If you have trouble with the syntax, well, then
 
 |#
 
+;; loeb: (listof ((natural -> any) -> any)) -> (listof any)
+;; Purpose: Each formula gets "get", which looks up another cell by its position.
+;; Returns every cell's final value. Cells are delayed, so the order of the
+;; formulas doesn't matter, as long as nothing refers to itself in a circle.
+(define (loeb formulas)
+  (define cells
+    (map (lambda (f) (delay (f (lambda (i) (force (list-ref cells i))))))
+         formulas))
+  (map force cells))
+
+;; cell 0 = price, cell 1 = 10% VAT, cell 2 = price + VAT
+(check-equal?
+ (loeb (list (lambda (get) 10)
+             (lambda (get) (* 1/10 (get 0)))
+             (lambda (get) (+ (get 0) (get 1)))))
+ '(10 1 11))
+
+;; same sheet with the total listed first: order doesn't matter
+(check-equal?
+ (loeb (list (lambda (get) (+ (get 1) (get 2)))
+             (lambda (get) 10)
+             (lambda (get) (* 1/10 (get 1)))))
+ '(11 10 1))
+
+;; each cell is the previous one plus 1
+(check-equal?
+ (loeb (list (lambda (get) 1)
+             (lambda (get) (+ 1 (get 0)))
+             (lambda (get) (+ 1 (get 1)))))
+ '(1 2 3))
 
