@@ -112,7 +112,7 @@ set up for the next interpreter.
                           (lambda () (val-of-cbv d env)))]
     [`(car^ ,e) ((car (val-of-cbv e env)))]
     [`(cdr^ ,e) ((cdr (val-of-cbv e env)))]
-    [`(let [(,x ,e)] ,b) (val-of-cbv b (extend-env x (box (val-of-cbv e env)) env))]
+    [`(let ((,x ,e)) ,b) (val-of-cbv b (extend-env x (box (val-of-cbv e env)) env))]
     [`(lambda (,x) ,b) (lambda (a) (val-of-cbv b (extend-env x a env)))]
     [`(,rator ,y) #:when (symbol? y)
                   ((val-of-cbv rator env) (box (unbox (apply-env env y))))]
@@ -151,6 +151,8 @@ val-of-cbv interpreter.
     [`(random ,n) (random (val-of-cbr n env))]
     [`(begin2 ,e1 ,e2) (begin (val-of-cbr e1 env) (val-of-cbr e2 env))]
     [`(set! ,x ,e) (set-box! (apply-env env x) (val-of-cbr e env))]
+    [`(let ((,x ,y)) ,body) #:when (symbol? y)
+                            (val-of-cbr body (extend-env x (apply-env env y) env))]
     [`(let ((,x ,e)) ,body)
      (val-of-cbr body (extend-env x (box (val-of-cbr e env)) env))]
     [`(lambda (,x) ,body)
