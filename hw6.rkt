@@ -1,6 +1,7 @@
 #lang racket
 
 (require rackunit)
+(require racket/trace)
 
 ;; Gradescope loads this file as a module and expects each required name
 ;; in the provide form below to exist. Replace each "not implemented"
@@ -87,15 +88,17 @@
 ;; one 0 in it. 4. Get it working for a list with more than one 0 in
 ;; it.
 
+;; Signature: listof numbers -> listof numbers
+;; Purpose: Returns the cdr of a list after the occurence of the last 0.
 (define (last-non-zero ls)
   (let/cc k
     (letrec
       ((lnz
          (λ (ls)
            (cond
-             [(empty? ls) '()]
-             [(zero? (car ls)) (k '())]
-             [else (cons (car ls) (lnz (cdr ls)))]))))
+             [(empty? ls) '()] ;; if the list is empty, return an empty list
+             [(zero? (car ls)) (k (lnz (cdr ls)))] ;; if the car is 0, discard front thus far and continue with the cdr
+             [else (cons (car ls) (lnz (cdr ls)))])))) ;; if the car is not 0, keep it and continue with the cdr
       (lnz ls))))
 
 (module+ test
@@ -169,8 +172,15 @@
     (letrec
       ((m/cc
          (λ (n*)
-           (error 'mult/cc "not implemented"))))
+           (cond
+             [(empty? n*) 1] ;; if we've reached the empty list, return 1
+             [(zero? (car n*)) (k 0)] ;; if we find a 0, invoke the continuation k with 0
+             [else (my-* (car n*) (m/cc (cdr n*)))])))) ;; simply multiply the car with the recursive call on the cdr
       (m/cc n*))))
+
+(check-equal? (mult/cc '()) 1)
+(check-equal? (mult/cc '(1 2 3 0 4 5)) 0)
+(check-equal? (mult/cc '(1 2 3 4 5)) 120)
 
 ;; If you require the racket trace library, and define my-* to be
 ;; traced, we see an interesting property. When you have a 0 in the
