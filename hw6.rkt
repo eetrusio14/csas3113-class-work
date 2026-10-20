@@ -182,6 +182,7 @@
 (check-equal? (mult/cc '(1 2 3 0 4 5)) 0)
 (check-equal? (mult/cc '(1 2 3 4 5)) 120)
 
+
 ;; If you require the racket trace library, and define my-* to be
 ;; traced, we see an interesting property. When you have a 0 in the
 ;; list, both the direct and accumulator passing versions perform
@@ -256,8 +257,26 @@ s
 |#
 
 
+;; Signature: pairof (sym . value) ls continuation -> any
+;; Purpose: CPSed version of walk; applies continuation k to the final value v walks to.
 (define (walk-cps v ls k)
-  (error 'walk-cps "not implemented"))
+  (letrec
+      ((walk-cps
+         (λ (v ls k)
+           (cond
+             [(symbol? v) ;; v might have a substitution in ls
+              (let ((p (assv v ls)))
+                (cond
+                  [p (walk-cps (cdr p) ls k)] ;; found one, keep walking its value with the same k
+                  [else (k v)]))] ;; no substitution for v, it's already a value
+             [else (k v)])))) ;; v isn't a symbol, so it's already a value
+    (walk-cps v ls k)))
+
+(check-equal? (walk-cps 'a '((a . 5) (b . 6) (c . 7)) (empty-k)) 5)
+(check-equal? (walk-cps 'a '((a . b) (b . c) (c . 7)) (empty-k)) 7)
+(check-equal? (walk-cps 'a '((a . q) (r . s) (q . r)) (empty-k)) 's)
+(check-equal? (walk-cps 'a '((a . q) (r . s) (q . r) (s . 10)) (empty-k)) 10)
+
 
 ;; 4. Define and test a procedure times-cps that is a CPSed version of
 ;; the following times procedure.
@@ -269,9 +288,21 @@ s
       [(zero? (car ls)) 0]
       [else (* (car ls) (times (cdr ls)))])))
 
-
+;; Signature: listof numbers continuation -> number
+;; Purpose: CPSed version of times; applies continuation k to the product of the numbers in ls.
 (define (times-cps ls k)
-  (error 'times-cps "not implemented"))
+  (letrec
+    ((times-cps
+        (λ (ls k)
+          (cond
+            [(empty? ls) (k 1)]
+            [(zero? (car ls)) (k 0)]
+            [else (times-cps (cdr ls) (λ (v) (k (* (car ls) v))))]))))
+    (times-cps ls k)))
+
+(check-equal? (times-cps '(1 2 3 4 5) (empty-k)) 120)
+(check-equal? (times-cps '(1 2 3 0 4 5) (empty-k)) 0)
+(check-equal? (times-cps '() (empty-k)) 1)
 
 ;; 5. Define a modified version of your times-cps above, called
 ;; times-cps-shortcut that doesn't apply k in the zero case. Instead,
