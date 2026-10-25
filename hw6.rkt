@@ -314,10 +314,21 @@ s
 ;; operations in languages that don't natively support them.
 
 
-
-
+;; Signature: listof numbers continuation -> number
+;; Purpose: Similar to times-cps, but on a 0, it returns 0 immediately without applying k.
 (define (times-cps-shortcut ls k)
-  (error 'times-cps-shortcut "not implemented"))
+  (letrec
+    ((times-cps-shortcut
+        (λ (ls k)
+          (cond
+            [(empty? ls) (k 1)]
+            [(zero? (car ls)) 0]
+            [else (times-cps-shortcut (cdr ls) (λ (v) (k (* (car ls) v))))]))))
+    (times-cps-shortcut ls k)))
+  
+(check-equal? (times-cps-shortcut '() (empty-k)) 1)
+(check-equal? (times-cps-shortcut '(1 2 3 0 4 5) (empty-k)) 0)
+(check-equal? (times-cps-shortcut '(1 2 3) (empty-k)) 6)
 
 ;; 6. Define and test a procedure cexpt-cps that is a CPSed version of
 ;; the following cexpt procedure.
@@ -338,9 +349,15 @@ s
 
 |#
 
-
+;; Signature: number continuation -> (number -> number)
+;; Purpose: CPS version of cexpt; passed k to the result, given n and a continuation,
+;; delivers m^n to that continuation k.
 (define (cexpt-cps m k)
-  (error 'cexpt-cps "not implemented"))
+  (k (λ (n k^)
+       (k^ (expt m n)))))
+
+(check-equal? (cexpt-cps 2 (lambda (f) (f 3 (empty-k)))) 8)
+(check-equal? (cexpt-cps 2 (lambda (f) (f 3 (lambda (v) (cexpt-cps v (lambda (g) (g 2 (empty-k)))))))) 64)
 
 ;; 7. Define and test a procedure count-syms*-cps that is a CPSed
 ;; version of the following count-syms* procedure:
